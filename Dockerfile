@@ -3,6 +3,7 @@ FROM node:23-alpine
 
 # Install Chromium and dependencies
 RUN apk add --no-cache \
+    curl \
     chromium \
     nss \
     freetype \
