@@ -1,6 +1,6 @@
 {
   "name": "thedude-map-extractor",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Extract and display TheDude network maps from MikroTik router",
   "main": "extract-manager.js",
   "repository": {
