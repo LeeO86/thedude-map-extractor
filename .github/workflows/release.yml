@@ -23,11 +23,9 @@ jobs:
         run: |
           echo "## Changes" > changelog.md
           git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD >> changelog.md
-          {
-            echo 'changelog<<EOF'
-            cat changelog.md
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          cat changelog.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: actions/create-release@v1
@@ -55,5 +53,5 @@ jobs:
             ```
 
             ${{ steps.changelog.outputs.changelog }}
-          draft: false
+          draft: true
           prerelease: false
