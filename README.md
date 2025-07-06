@@ -2,28 +2,7 @@
 
 Ein Tool zur kontinuierlichen Extraktion und Anzeige von MikroTik TheDude Network Maps über eine moderne Web-Oberfläche.
 
-[![Docker Build](https://github.com/LeeO86/thedude-map-extractor/actions/workflows/docker-build.yml/badge```
-thedude-map-extractor/
-├── .devcontainer/ # Dev Container Konfiguration
-├── .github/workflows/ # GitHub Actions
-├── extract-manager.js # Hauptanwendung (Manager)
-├── extract-single-map.js # Einzelne Map-Extraktion
-├── server.js # Express Web-Server
-├── public/
-│ ├── index.html # Web-Interface
-│ ├── favicon.svg # SVG Favicon
-│ ├── favicon.ico # ICO Favicon
-│ ├── _.png # PNG Favicons (verschiedene Größen)
-│ └── site.webmanifest # PWA Manifest
-├── extracted/ # Extrahierte SVG-Dateien
-│ ├── _\_latest.svg # Aktuelle SVG-Dateien
-│ └── \*\_latest.json # Metadaten
-├── Dockerfile # Docker-Image
-├── docker-compose.yml # Development
-├── docker-compose.prod.yml # Production
-└── package.json
-
-````thub.com/LeeO86/thedude-map-extractor/actions/workflows/docker-build.yml)
+[![Docker Build](https://github.com/LeeO86/thedude-map-extractor/actions/workflows/docker-build.yml/badge.svg)](https://github.com/LeeO86/thedude-map-extractor/actions/workflows/docker-build.yml)
 [![GitHub Container Registry](https://img.shields.io/badge/ghcr.io-thedude--map--extractor-blue)](https://github.com/LeeO86/thedude-map-extractor/pkgs/container/thedude-map-extractor)
 
 ## 🚀 Features
@@ -55,7 +34,7 @@ cd thedude-map-extractor
 code .
 
 # 3. Dev Container starten (VS Code Command Palette: "Dev Containers: Reopen in Container")
-````
+```
 
 ### Option 2: Lokale Installation
 
@@ -272,14 +251,18 @@ processedSvgData = processedSvgData.replace(
 ## 📁 Projektstruktur
 
 ```
-the-dude-map-extractor/
+thedude-map-extractor/
 ├── .devcontainer/           # Dev Container Konfiguration
 ├── .github/workflows/       # GitHub Actions
 ├── extract-manager.js       # Hauptanwendung (Manager)
 ├── extract-single-map.js    # Einzelne Map-Extraktion
 ├── server.js               # Express Web-Server
 ├── public/
-│   └── index.html          # Web-Interface
+│   ├── index.html          # Web-Interface
+│   ├── favicon.svg         # SVG Favicon
+│   ├── favicon.ico         # ICO Favicon
+│   ├── *.png               # PNG Favicons (verschiedene Größen)
+│   └── site.webmanifest    # PWA Manifest
 ├── extracted/              # Extrahierte SVG-Dateien
 │   ├── *_latest.svg        # Aktuelle SVG-Dateien
 │   └── *_latest.json       # Metadaten
