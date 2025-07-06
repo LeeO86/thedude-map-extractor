@@ -1,0 +1,34 @@
+services:
+  thedude-map-extractor:
+    image: ghcr.io/leeo86/thedude-map-extractor:latest
+    container_name: thedude-map-extractor-prod
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - MIKROTIK_IP=10.0.0.10
+      - MIKROTIK_USER=admin
+      - MIKROTIK_PASS=password
+      - MAPS=10159:Main,84820:APs,84823:CAMs,84826:Generatoren,84830:IoT
+      - PORT=3000
+      - EXTRACT_INTERVAL=500
+      - MAX_MAPS=5
+      - MAX_RETRIES=3
+      - TIMEOUT=30000
+      - DEBUG=false
+      - HEADLESS=true
+    volumes:
+      - extracted_data:/usr/src/app/extracted
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+volumes:
+  extracted_data:
+    driver: local

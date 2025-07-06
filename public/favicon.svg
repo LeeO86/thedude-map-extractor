@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Gradient Definitions -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#2563eb;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1d4ed8;stop-opacity:1" />
+    </linearGradient>
+    <radialGradient id="centerGlow" cx="50%" cy="50%" r="40%">
+      <stop offset="0%" style="stop-color:#60a5fa;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:1" />
+    </radialGradient>
+  </defs>
+  
+  <!-- Background rounded rectangle -->
+  <rect width="512" height="512" rx="96" fill="url(#bgGradient)"/>
+  
+  <!-- Network connections (behind nodes) -->
+  <g stroke="#94a3b8" stroke-width="12" stroke-linecap="round" opacity="0.7">
+    <line x1="160" y1="160" x2="256" y2="256"/>
+    <line x1="352" y1="160" x2="256" y2="256"/>
+    <line x1="256" y1="256" x2="160" y2="352"/>
+    <line x1="256" y1="256" x2="352" y2="352"/>
+  </g>
+  
+  <!-- Outer network nodes -->
+  <g>
+    <!-- Top left -->
+    <circle cx="160" cy="160" r="40" fill="#60a5fa" stroke="#ffffff" stroke-width="6"/>
+    <circle cx="160" cy="160" r="24" fill="#93c5fd" opacity="0.9"/>
+    
+    <!-- Top right -->
+    <circle cx="352" cy="160" r="40" fill="#60a5fa" stroke="#ffffff" stroke-width="6"/>
+    <circle cx="352" cy="160" r="24" fill="#93c5fd" opacity="0.9"/>
+    
+    <!-- Bottom left -->
+    <circle cx="160" cy="352" r="40" fill="#60a5fa" stroke="#ffffff" stroke-width="6"/>
+    <circle cx="160" cy="352" r="24" fill="#93c5fd" opacity="0.9"/>
+    
+    <!-- Bottom right -->
+    <circle cx="352" cy="352" r="40" fill="#60a5fa" stroke="#ffffff" stroke-width="6"/>
+    <circle cx="352" cy="352" r="24" fill="#93c5fd" opacity="0.9"/>
+  </g>
+  
+  <!-- Central main node -->
+  <circle cx="256" cy="256" r="56" fill="url(#centerGlow)" stroke="#ffffff" stroke-width="8"/>
+  <circle cx="256" cy="256" r="36" fill="#1e40af" opacity="0.95"/>
+  <circle cx="256" cy="256" r="20" fill="#ffffff" opacity="0.95"/>
+</svg>

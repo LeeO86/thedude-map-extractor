@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          echo "## Changes" > changelog.md
+          git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD >> changelog.md
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          cat changelog.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          body: |
+            ## 🚀 TheDude Map Extractor ${{ github.ref_name }}
+
+            ### Docker Images
+            - `ghcr.io/leeo86/thedude-map-extractor:${{ github.ref_name }}`
+            - `ghcr.io/leeo86/thedude-map-extractor:latest`
+
+            ### Quick Start
+            ```bash
+            docker run -d \
+              --name thedude-extractor \
+              -p 3000:3000 \
+              -e MIKROTIK_IP=your-router-ip \
+              -e MIKROTIK_USER=admin \
+              -e MIKROTIK_PASS=your-password \
+              ghcr.io/leeo86/thedude-map-extractor:${{ github.ref_name }}
+            ```
+
+            ${{ steps.changelog.outputs.changelog }}
+          draft: false
+          prerelease: false

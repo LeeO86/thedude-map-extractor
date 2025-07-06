@@ -1,0 +1,22 @@
+services:
+  thedude-map-extractor:
+    build: .
+    container_name: thedude-map-extractor-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - MIKROTIK_IP=10.0.0.10
+      - MIKROTIK_USER=admin
+      - MIKROTIK_PASS=password
+      - MAPS=10159:Main,84820:APs,84823:CAMs,84826:Generatoren,84830:IoT
+      - PORT=3000
+      - EXTRACT_INTERVAL=500
+      - MAX_MAPS=5
+      - MAX_RETRIES=3
+      - TIMEOUT=30000
+      - DEBUG=true
+      - HEADLESS=true
+    volumes:
+      - ./extracted:/usr/src/app/extracted
+    restart: unless-stopped
