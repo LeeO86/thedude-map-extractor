@@ -41,12 +41,15 @@ RUN chown -R nodejs:nodejs .
 # Switch to non-root user
 USER nodejs
 
+# Set default port
+ENV PORT=3000
+
 # Expose port
-EXPOSE 3000
+EXPOSE $PORT
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-3000}/api/status || exit 1
+    CMD curl -f http://localhost:$PORT/api/status || exit 1
 
 # Start application
 CMD ["npm", "start"]
