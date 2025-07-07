@@ -14,6 +14,9 @@ class SingleMapExtractor {
     this.page = null;
     this.extractionInterval = null;
     this.isRunning = false;
+    this.consecutiveErrors = 0;
+    this.maxConsecutiveErrors = 5;
+    this.lastSuccessfulExtraction = Date.now();
   }
 
   async init() {
@@ -120,6 +123,63 @@ class SingleMapExtractor {
       }
     } catch (error) {
       // Advanced mode switch failed, continue anyway
+    }
+  }
+
+  async checkIfLoggedOut() {
+    try {
+      // Prüfe auf Login-Seite Indikatoren
+      const loginIndicators = [
+        '.login',
+        'input[name="username"]',
+        'input[name="password"]',
+        'button[type="submit"]',
+        '.login-form',
+        '#login'
+      ];
+      
+      for (const selector of loginIndicators) {
+        try {
+          await this.page.waitForSelector(selector, { timeout: 1000 });
+          console.log(`🔍 [${this.mapName}] Login screen detected (${selector})`);
+          return true;
+        } catch (error) {
+          // Continue checking other selectors
+        }
+      }
+      
+      // Prüfe auch anhand der URL
+      const currentUrl = await this.page.url();
+      if (currentUrl.includes('login') || currentUrl.includes('auth')) {
+        console.log(`🔍 [${this.mapName}] Login screen detected (URL: ${currentUrl})`);
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error(`❌ [${this.mapName}] Error checking login status:`, error.message);
+      return false;
+    }
+  }
+
+  async handleSessionExpired() {
+    console.log(`🔄 [${this.mapName}] Session expired, attempting re-login...`);
+    
+    try {
+      // Versuche erneut zu loggen
+      await this.login();
+      await this.navigateToMap();
+      
+      // Reset error counter on successful recovery
+      this.consecutiveErrors = 0;
+      this.lastSuccessfulExtraction = Date.now();
+      
+      console.log(`✅ [${this.mapName}] Session recovered successfully`);
+      return true;
+      
+    } catch (error) {
+      console.error(`❌ [${this.mapName}] Session recovery failed:`, error.message);
+      return false;
     }
   }
 
@@ -244,10 +304,35 @@ class SingleMapExtractor {
       
       if (svgData.data && svgData.hasContent) {
         await this.saveSVGData(svgData.data);
+        // Reset error counter on successful extraction
+        this.consecutiveErrors = 0;
+        this.lastSuccessfulExtraction = Date.now();
       }
       
     } catch (error) {
       console.error(`❌ [${this.mapName}] SVG extraction failed:`, error.message);
+      this.consecutiveErrors++;
+      
+      // Check if we're logged out
+      const isLoggedOut = await this.checkIfLoggedOut();
+      if (isLoggedOut) {
+        console.log(`🔄 [${this.mapName}] Detected logout, attempting session recovery...`);
+        const recovered = await this.handleSessionExpired();
+        if (!recovered) {
+          console.error(`💥 [${this.mapName}] Session recovery failed, exiting...`);
+          await this.stop();
+          process.exit(1);
+        }
+      }
+      
+      // If too many consecutive errors, exit
+      if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
+        console.error(`💥 [${this.mapName}] Too many consecutive errors (${this.consecutiveErrors}), exiting...`);
+        await this.stop();
+        process.exit(1);
+      }
+      
+      throw error;
     }
   }
 
