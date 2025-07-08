@@ -2,7 +2,6 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
-const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -10,6 +9,12 @@ const io = socketIo(server);
 
 // Konfiguration
 const PORT = process.env.PORT || 3000;
+
+// In-Memory Store für aktuelle Map-Daten
+const mapStore = new Map();
+
+// Update Counter für reduced logging
+const mapUpdateCounts = new Map();
 
 // Middleware
 app.use(express.static(path.join(__dirname, 'public')));
@@ -30,69 +35,58 @@ io.on('connection', (socket) => {
   });
 });
 
-// SVG-Dateien überwachen und Updates senden
-function watchSVGFiles() {
-  const extractedDir = path.join(__dirname, 'extracted');
-  
-  if (!fs.existsSync(extractedDir)) {
-    fs.mkdirSync(extractedDir, { recursive: true });
-  }
-  
-  // Überwachung für alle _latest.svg Dateien
-  fs.watch(extractedDir, (eventType, filename) => {
-    if (filename && filename.endsWith('_latest.svg')) {
-      // Extract mapId from filename (e.g., "10159_Main_Test_Update_latest.svg" -> "10159")
-      const mapId = filename.split('_')[0];
-      
-      // Updates an alle verbundenen Clients senden
-      io.emit('map-updated', {
-        mapId: mapId,
-        timestamp: new Date().toISOString()
-      });
+// Broadcast-Funktion für In-Memory Updates
+function broadcastMapUpdate(mapId, svgData, metadata) {
+  try {
+    // Update Memory Store
+    mapStore.set(mapId, {
+      svgData,
+      metadata,
+      lastUpdated: Date.now()
+    });
+    
+    // Logging nur alle 10 Updates pro Map (reduziert Spam)
+    if (!mapUpdateCounts.has(mapId)) {
+      mapUpdateCounts.set(mapId, 0);
     }
-  });
+    const count = mapUpdateCounts.get(mapId) + 1;
+    mapUpdateCounts.set(mapId, count);
+    
+    if (count % 10 === 1) {
+      console.log(`📡 [MEMORY] Map ${mapId} updated #${count} (${Math.round(svgData.length / 1024)}KB)`);
+    }
+    
+    // Real-time Update an alle Clients senden
+    io.emit('map-updated', {
+      mapId: mapId,
+      timestamp: metadata.timestamp || new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error broadcasting map update:', error);
+  }
 }
 
 // Map-Daten an Client senden
 function sendMapData(socket, mapId) {
   try {
-    const extractedDir = path.join(__dirname, 'extracted');
-    
-    // Finde die neueste SVG-Datei für diese mapId
-    const files = fs.readdirSync(extractedDir);
-    const svgFiles = files.filter(f => f.startsWith(`${mapId}_`) && f.endsWith('_latest.svg'));
-    const jsonFiles = files.filter(f => f.startsWith(`${mapId}_`) && f.endsWith('_latest.json'));
-    
-    if (svgFiles.length === 0) {
-      socket.emit('map-error', {
+    // Zuerst im Memory Store prüfen
+    if (mapStore.has(mapId)) {
+      const memoryData = mapStore.get(mapId);
+      console.log(`📡 [MEMORY] Sending map ${mapId} from memory store`);
+      
+      socket.emit('map-data', {
         mapId: mapId,
-        error: 'Map not found'
+        svgData: memoryData.svgData,
+        metadata: memoryData.metadata
       });
       return;
     }
     
-    // Neueste Datei verwenden (nach Timestamp sortiert)
-    const latestSvgFile = svgFiles.sort().pop();
-    const latestJsonFile = jsonFiles.sort().pop();
-    
-    const svgPath = path.join(extractedDir, latestSvgFile);
-    const svgData = fs.readFileSync(svgPath, 'utf8');
-    
-    let metadata = {
+    // Map nicht im Memory Store gefunden
+    socket.emit('map-error', {
       mapId: mapId,
-      mapName: `Map ${mapId}`,
-      timestamp: new Date().toISOString()
-    };
-    
-    if (latestJsonFile) {
-      const metadataPath = path.join(extractedDir, latestJsonFile);
-      metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-    }
-    
-    socket.emit('map-data', {
-      mapId: mapId,
-      svgData: svgData,
-      metadata: metadata
+      error: 'Map not found in memory store'
     });
     
   } catch (error) {
@@ -107,25 +101,15 @@ function sendMapData(socket, mapId) {
 // Maps-Liste an Client senden
 function sendMapsList(socket) {
   try {
-    const extractedDir = path.join(__dirname, 'extracted');
     const maps = [];
     
-    if (fs.existsSync(extractedDir)) {
-      const files = fs.readdirSync(extractedDir);
-      const latestFiles = files.filter(f => f.endsWith('_latest.json'));
-      
-      latestFiles.forEach(file => {
-        try {
-          const metadata = JSON.parse(fs.readFileSync(path.join(extractedDir, file), 'utf8'));
-          maps.push({
-            id: metadata.mapId,
-            name: metadata.mapName,
-            lastUpdate: metadata.timestamp,
-            size: metadata.size
-          });
-        } catch (error) {
-          console.error(`Error reading metadata for ${file}:`, error);
-        }
+    // Aus Memory Store laden
+    for (const [mapId, data] of mapStore.entries()) {
+      maps.push({
+        id: mapId,
+        name: data.metadata.mapName || data.metadata.name || `Map ${mapId}`,
+        lastUpdate: data.metadata.timestamp,
+        size: Math.round(data.svgData.length / 1024) + 'KB'
       });
     }
     
@@ -143,31 +127,21 @@ function sendMapsList(socket) {
 // REST API für Map-Verwaltung
 app.get('/api/maps', (req, res) => {
   try {
-    const extractedDir = path.join(__dirname, 'extracted');
     const maps = [];
     
-    if (fs.existsSync(extractedDir)) {
-      const files = fs.readdirSync(extractedDir);
-      const latestFiles = files.filter(f => f.endsWith('_latest.json'));
-      
-      latestFiles.forEach(file => {
-        try {
-          const metadata = JSON.parse(fs.readFileSync(path.join(extractedDir, file), 'utf8'));
-          maps.push({
-            id: metadata.mapId,
-            name: metadata.mapName,
-            lastUpdate: metadata.timestamp,
-            size: metadata.size
-          });
-        } catch (error) {
-          console.error(`Error reading metadata for ${file}:`, error);
-        }
+    // Aus Memory Store
+    for (const [mapId, data] of mapStore.entries()) {
+      maps.push({
+        id: mapId,
+        name: data.metadata.mapName || data.metadata.name || `Map ${mapId}`,
+        lastUpdate: new Date(data.lastUpdated).toISOString(),
+        size: Math.round(data.svgData.length / 1024) + 'KB'
       });
     }
     
     res.json({ maps });
   } catch (error) {
-    console.error('Error listing maps:', error);
+    console.error('Error getting maps list:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -175,42 +149,20 @@ app.get('/api/maps', (req, res) => {
 app.get('/api/maps/:id', (req, res) => {
   try {
     const mapId = req.params.id;
-    const extractedDir = path.join(__dirname, 'extracted');
     
-    // Finde die neueste SVG-Datei für diese mapId
-    const files = fs.readdirSync(extractedDir);
-    const svgFiles = files.filter(f => f.startsWith(`${mapId}_`) && f.endsWith('_latest.svg'));
-    const jsonFiles = files.filter(f => f.startsWith(`${mapId}_`) && f.endsWith('_latest.json'));
-    
-    if (svgFiles.length === 0) {
-      return res.status(404).json({ error: 'Map not found' });
+    // Im Memory Store prüfen
+    if (mapStore.has(mapId)) {
+      const data = mapStore.get(mapId);
+      return res.json({
+        mapId: mapId,
+        svgData: data.svgData,
+        metadata: data.metadata
+      });
     }
     
-    // Neueste Datei verwenden (nach Timestamp sortiert)
-    const latestSvgFile = svgFiles.sort().pop();
-    const latestJsonFile = jsonFiles.sort().pop();
-    
-    const svgPath = path.join(extractedDir, latestSvgFile);
-    const svgData = fs.readFileSync(svgPath, 'utf8');
-    
-    let metadata = {
-      mapId: mapId,
-      mapName: `Map ${mapId}`,
-      timestamp: new Date().toISOString()
-    };
-    
-    if (latestJsonFile) {
-      const metadataPath = path.join(extractedDir, latestJsonFile);
-      metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-    }
-
-    res.json({
-      mapId: mapId,
-      svgData: svgData,
-      metadata: metadata
-    });
+    res.status(404).json({ error: 'Map not found in memory store' });
   } catch (error) {
-    console.error(`Error getting map ${req.params.id}:`, error);
+    console.error('Error getting map:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -218,27 +170,15 @@ app.get('/api/maps/:id', (req, res) => {
 // Extraktions-Status API
 app.get('/api/status', (req, res) => {
   try {
-    const extractedDir = path.join(__dirname, 'extracted');
-    const files = fs.existsSync(extractedDir) ? fs.readdirSync(extractedDir) : [];
-    
     const stats = {
-      totalFiles: files.length,
-      svgFiles: files.filter(f => f.endsWith('.svg')).length,
-      latestFiles: files.filter(f => f.endsWith('_latest.svg')).length,
-      lastUpdate: null
+      totalMaps: mapStore.size,
+      lastUpdate: null,
+      memoryUsage: process.memoryUsage()
     };
     
-    // Neueste Datei finden
-    const latestFiles = files.filter(f => f.endsWith('_latest.json'));
-    if (latestFiles.length > 0) {
-      const timestamps = latestFiles.map(file => {
-        try {
-          const metadata = JSON.parse(fs.readFileSync(path.join(extractedDir, file), 'utf8'));
-          return new Date(metadata.timestamp);
-        } catch {
-          return new Date(0);
-        }
-      });
+    // Neueste Update-Zeit finden
+    if (mapStore.size > 0) {
+      const timestamps = Array.from(mapStore.values()).map(data => data.lastUpdated);
       stats.lastUpdate = new Date(Math.max(...timestamps)).toISOString();
     }
     
@@ -257,6 +197,48 @@ app.get('/', (req, res) => {
 // SPA-Routing: Alle nicht-API Routen zur index.html weiterleiten
 app.get('/map/:id', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// HTTP API Endpunkte für Memory-Store
+app.get('/api/maps', (req, res) => {
+  try {
+    const maps = [];
+    
+    // Zuerst aus Memory Store
+    for (const [mapId, data] of mapStore.entries()) {
+      maps.push({
+        id: mapId,
+        name: data.metadata.mapName || data.metadata.name || `Map ${mapId}`,
+        lastUpdate: new Date(data.lastUpdated).toISOString()
+      });
+    }
+    
+    res.json({ maps });
+  } catch (error) {
+    console.error('Error getting maps list:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/maps/:id', (req, res) => {
+  try {
+    const mapId = req.params.id;
+    
+    // Zuerst im Memory Store prüfen
+    if (mapStore.has(mapId)) {
+      const data = mapStore.get(mapId);
+      return res.json({
+        mapId: mapId,
+        svgData: data.svgData,
+        metadata: data.metadata
+      });
+    }
+    
+    res.status(404).json({ error: 'Map not found in memory store' });
+  } catch (error) {
+    console.error('Error getting map:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Catch-all für alle anderen Routen (außer API)
@@ -279,8 +261,7 @@ app.get('*', (req, res) => {
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🌐 Open http://localhost:${PORT} in your browser`);
-  console.log(`📁 Extracted files directory: ${path.join(__dirname, 'extracted')}`);
-  
-  // SVG-Dateien überwachen
-  watchSVGFiles();
 });
+
+// Export der Broadcast-Funktion für external use
+module.exports = { broadcastMapUpdate };

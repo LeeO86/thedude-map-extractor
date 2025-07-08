@@ -17,6 +17,4 @@ services:
       - TIMEOUT=30000
       - DEBUG=true
       - HEADLESS=true
-    volumes:
-      - ./extracted:/usr/src/app/extracted
     restart: unless-stopped

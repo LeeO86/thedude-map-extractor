@@ -14,8 +14,8 @@
   "scripts": {
     "start": "node extract-manager.js",
     "server": "node server.js",
-    "dev": "nodemon --ignore extracted/ --ignore '*.log' extract-manager.js",
-    "dev:server": "nodemon --ignore extracted/ --ignore '*.log' server.js",
+    "dev": "nodemon --ignore '*.log' extract-manager.js",
+    "dev:server": "nodemon --ignore '*.log' server.js",
     "extract-single": "node extract-single-map.js"
   },
   "dependencies": {
@@ -29,7 +29,6 @@
   },
   "nodemonConfig": {
     "ignore": [
-      "extracted/",
       "*.log",
       "debug-*.png",
       "*.tmp",

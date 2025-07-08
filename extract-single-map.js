@@ -1,15 +1,14 @@
 const puppeteer = require('puppeteer');
-const fs = require('fs');
-const path = require('path');
 require('dotenv').config();
 
 class SingleMapExtractor {
-  constructor(routerIP, username, password, mapId, mapName) {
+  constructor(routerIP, username, password, mapId, mapName, onUpdateCallback = null) {
     this.routerIP = routerIP;
     this.username = username;
     this.password = password;
     this.mapId = mapId;
     this.mapName = mapName;
+    this.onUpdateCallback = onUpdateCallback;
     this.browser = null;
     this.page = null;
     this.extractionInterval = null;
@@ -17,6 +16,7 @@ class SingleMapExtractor {
     this.consecutiveErrors = 0;
     this.maxConsecutiveErrors = 5;
     this.lastSuccessfulExtraction = Date.now();
+    this.extractionCount = 0; // Für reduzierte Verbosity
   }
 
   async init() {
@@ -307,6 +307,7 @@ class SingleMapExtractor {
         // Reset error counter on successful extraction
         this.consecutiveErrors = 0;
         this.lastSuccessfulExtraction = Date.now();
+        this.extractionCount++;
       }
       
     } catch (error) {
@@ -338,19 +339,13 @@ class SingleMapExtractor {
 
   async saveSVGData(svgData) {
     try {
-      const extractedDir = path.join(__dirname, 'extracted');
-      if (!fs.existsSync(extractedDir)) {
-        fs.mkdirSync(extractedDir, { recursive: true });
-      }
-      
       const timestamp = new Date().toISOString();
-      const filename = `${this.mapId}_${this.mapName.replace(/[^a-zA-Z0-9]/g, '_')}_latest`;
       
-      // Save SVG
+      // SVG für Dark Mode anpassen - weißen Background entfernen
+      let processedSvgData = svgData;
+      
+      // SVG-Verarbeitung (nur für SVG-Daten)
       if (svgData.startsWith('<svg')) {
-        // SVG für Dark Mode anpassen - weißen Background entfernen
-        let processedSvgData = svgData;
-        
         // Entferne background-style Attribute
         processedSvgData = processedSvgData.replace(/style="[^"]*background:\s*rgb\(255,\s*255,\s*255\)[^"]*"/gi, '');
         processedSvgData = processedSvgData.replace(/style="[^"]*background:\s*#ffffff[^"]*"/gi, '');
@@ -363,15 +358,9 @@ class SingleMapExtractor {
         
         // Entferne weiße rect-Backgrounds
         processedSvgData = processedSvgData.replace(/(<rect[^>]*fill=")(?:white|#ffffff|rgb\(255,\s*255,\s*255\))("[^>]*>)/gi, '$1transparent$2');
-        
-        fs.writeFileSync(path.join(extractedDir, `${filename}.svg`), processedSvgData);
-      } else if (svgData.startsWith('data:image/')) {
-        // Canvas data URL
-        const base64Data = svgData.replace(/^data:image\/png;base64,/, '');
-        fs.writeFileSync(path.join(extractedDir, `${filename}.png`), base64Data, 'base64');
       }
       
-      // Save metadata
+      // Metadata erstellen
       const metadata = {
         mapId: this.mapId,
         mapName: this.mapName,
@@ -380,10 +369,27 @@ class SingleMapExtractor {
         selector: this.workingSelector
       };
       
-      fs.writeFileSync(path.join(extractedDir, `${filename}.json`), JSON.stringify(metadata, null, 2));
+      // IPC Message an Parent Process senden (In-Memory-System)
+      if (process.send) {
+        try {
+          process.send({
+            type: 'map-update',
+            mapId: this.mapId,
+            svgData: processedSvgData,
+            metadata: metadata
+          });
+          
+          // Reduziertes Logging - nur jede 20. Extraktion loggen
+          if (this.extractionCount % 20 === 1) {
+            console.log(`📡 [${this.mapName}] Extraction #${this.extractionCount} sent via IPC (${Math.round(processedSvgData.length / 1024)}KB)`);
+          }
+        } catch (ipcError) {
+          console.error(`❌ [${this.mapName}] IPC error:`, ipcError.message);
+        }
+      }
       
     } catch (error) {
-      console.error(`❌ [${this.mapName}] Error saving SVG data:`, error);
+      console.error(`❌ [${this.mapName}] Error processing SVG data:`, error);
     }
   }
 

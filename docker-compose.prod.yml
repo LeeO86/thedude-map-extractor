@@ -17,8 +17,6 @@ services:
       - TIMEOUT=30000
       - DEBUG=false
       - HEADLESS=true
-    volumes:
-      - extracted_data:/usr/src/app/extracted
     restart: always
     deploy:
       resources:
@@ -28,7 +26,3 @@ services:
         reservations:
           cpus: '1.0'
           memory: 1G
-
-volumes:
-  extracted_data:
-    driver: local

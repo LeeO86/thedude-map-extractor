@@ -10,8 +10,6 @@ coverage
 .vscode
 .idea
 *.log
-extracted/*
-!extracted/.gitkeep
 logs/*
 !logs/.gitkeep
 .DS_Store

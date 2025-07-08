@@ -42,9 +42,6 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Create extracted directory
-RUN mkdir -p extracted
-
 # Expose port
 EXPOSE 3000
 

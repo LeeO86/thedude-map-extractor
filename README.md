@@ -263,9 +263,6 @@ thedude-map-extractor/
 │   ├── favicon.ico         # ICO Favicon
 │   ├── *.png               # PNG Favicons (verschiedene Größen)
 │   └── site.webmanifest    # PWA Manifest
-├── extracted/              # Extrahierte SVG-Dateien
-│   ├── *_latest.svg        # Aktuelle SVG-Dateien
-│   └── *_latest.json       # Metadaten
 ├── Dockerfile              # Docker-Image
 ├── docker-compose.yml      # Development
 ├── docker-compose.prod.yml # Production

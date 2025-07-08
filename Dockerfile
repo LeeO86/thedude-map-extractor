@@ -32,9 +32,6 @@ RUN npm ci --only=production && npm cache clean --force
 # Copy source code
 COPY . .
 
-# Create extracted directory
-RUN mkdir -p extracted && chown -R nodejs:nodejs extracted
-
 # Change ownership
 RUN chown -R nodejs:nodejs .
 

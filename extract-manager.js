@@ -2,10 +2,14 @@ const { spawn } = require('child_process');
 const path = require('path');
 require('dotenv').config();
 
+// Server-Modul für in-process Callback
+let serverModule = null;
+
 class MapExtractionManager {
   constructor() {
     this.processes = new Map();
     this.serverProcess = null;
+    this.broadcastCallback = null;
     this.isRunning = false;
   }
 
@@ -30,50 +34,15 @@ class MapExtractionManager {
   async startWebServer() {
     console.log('🌐 Starting web server...');
     
-    const serverPath = path.join(__dirname, 'server.js');
-    const serverProcess = spawn('node', [serverPath], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env }
-    });
-    
-    this.serverProcess = serverProcess;
-    
-    // Pipe server output with prefix - only essential messages
-    serverProcess.stdout.on('data', (data) => {
-      const lines = data.toString().split('\n').filter(line => line.trim());
-      lines.forEach(line => {
-        // Only show startup and error messages
-        if (line.includes('Server running') || line.includes('WebSocket') || line.includes('Error')) {
-          console.log(`🌐 [SERVER] ${line}`);
-        }
-      });
-    });
-    
-    serverProcess.stderr.on('data', (data) => {
-      const lines = data.toString().split('\n').filter(line => line.trim());
-      lines.forEach(line => {
-        console.log(`🌐 [SERVER] ${line}`);
-      });
-    });
-    
-    serverProcess.on('exit', (code) => {
-      console.log(`💀 [SERVER] Web server exited with code ${code}`);
-      this.serverProcess = null;
-      
-      // Restart server if it wasn't intentionally stopped
-      if (this.isRunning && code !== 0) {
-        console.log(`🔄 [SERVER] Restarting web server in 5 seconds...`);
-        setTimeout(() => {
-          if (this.isRunning) {
-            this.startWebServer();
-          }
-        }, 5000);
-      }
-    });
-    
-    // Wait a bit for server to start
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    console.log('✅ Web server started');
+    // Server als Modul laden für Callback-Zugriff
+    try {
+      serverModule = require('./server.js');
+      this.broadcastCallback = serverModule.broadcastMapUpdate;
+      console.log('✅ Web server started');
+    } catch (error) {
+      console.error('❌ Failed to start web server:', error);
+      throw error;
+    }
   }
 
   async startMapExtraction(map) {
@@ -81,18 +50,29 @@ class MapExtractionManager {
     
     const scriptPath = path.join(__dirname, 'extract-single-map.js');
     const child = spawn('node', [scriptPath, map.id, map.name], {
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       env: { ...process.env }
+    });
+    
+    // IPC Message Handler für Map-Updates
+    child.on('message', (message) => {
+      if (message.type === 'map-update' && this.broadcastCallback) {
+        try {
+          this.broadcastCallback(message.mapId, message.svgData, message.metadata);
+        } catch (error) {
+          console.error(`❌ [${map.name}] Broadcast error:`, error);
+        }
+      }
     });
     
     // Pipe output with map name prefix - only important messages
     child.stdout.on('data', (data) => {
       const lines = data.toString().split('\n').filter(line => line.trim());
       lines.forEach(line => {
-        // Only log important messages (errors, success, login status)
-        if (line.includes('✅') || line.includes('❌') || line.includes('🚀') || 
+        // Only log important messages (startup, errors, login status)
+        if (line.includes('🚀') || line.includes('❌') || 
             line.includes('Login successful') || line.includes('Extraction started') ||
-            line.includes('Error') || line.includes('Failed')) {
+            line.includes('Error') || line.includes('Failed') || line.includes('exited')) {
           console.log(`📊 [${map.name}] ${line}`);
         }
       });
@@ -220,7 +200,7 @@ class MapExtractionManager {
     
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log(`🎯 Total extraction processes: ${this.processes.size}`);
-    console.log(`📁 Output directory: ${path.join(__dirname, 'extracted')}`);
+    console.log(`� Memory-only mode: Maps stored in-memory and pushed via IPC`);
     console.log(`🌐 Web interface: http://localhost:${process.env.PORT || 3000}`);
     console.log('\nPress Ctrl+C to stop all processes');
     
