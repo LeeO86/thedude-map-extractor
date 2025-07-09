@@ -28,7 +28,7 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV PUPPETEER_CACHE_DIR=/tmp/puppeteer-cache
 
 # Node.js Memory-Optimierungen
-ENV NODE_OPTIONS="--max-old-space-size=768 --expose-gc --optimize-for-size"
+ENV NODE_OPTIONS="--max-old-space-size=768 --expose-gc"
 
 # Copy package files
 COPY package*.json ./
