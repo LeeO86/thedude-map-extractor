@@ -17,19 +17,78 @@ class SingleMapExtractor {
     this.maxConsecutiveErrors = 5;
     this.lastSuccessfulExtraction = Date.now();
     this.extractionCount = 0; // Für reduzierte Verbosity
+    this.lastBrowserRestart = Date.now(); // Für periodischen Browser-Neustart
+    this.browserRestartInterval = 30 * 60 * 1000; // Alle 30 Minuten Browser neu starten
   }
 
   async init() {
     const headless = process.env.HEADLESS === 'true';
     console.log(`🚀 [${this.mapName}] Starting extraction process`);
     
-    this.browser = await puppeteer.launch({
-      headless: headless,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-web-security'],
-      defaultViewport: { width: 1920, height: 1080 }
-    });
-    
-    this.page = await this.browser.newPage();
+    try {
+      this.browser = await puppeteer.launch({
+        headless: headless,
+        args: [
+          '--no-sandbox', 
+          '--disable-setuid-sandbox', 
+          '--disable-web-security',
+          '--disable-dev-shm-usage', // Weniger shared memory nutzen
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-background-networking',
+          '--disable-back-forward-cache',
+          '--disable-ipc-flooding-protection',
+          '--no-default-browser-check',
+          '--no-first-run',
+          '--disable-default-apps',
+          '--disable-popup-blocking',
+          '--disable-prompt-on-repost',
+          '--disable-hang-monitor',
+          '--disable-sync',
+          '--disable-translate',
+          '--disable-extensions',
+          '--disable-plugins',
+          '--disable-images', // Bilder deaktivieren um Memory zu sparen
+          '--memory-pressure-off',
+          '--aggressive-cache-discard', // Aggressives Cache-Clearing
+          '--purge-memory-button',
+          '--disable-background-mode',
+          '--disable-gpu-sandbox'
+          // Entfernt: --single-process und --no-zygote (verursachen Probleme)
+        ],
+        defaultViewport: { width: 1920, height: 1080 },
+        timeout: 30000
+      });
+      
+      console.log(`✅ [${this.mapName}] Browser launched successfully`);
+      
+      this.page = await this.browser.newPage();
+      console.log(`✅ [${this.mapName}] New page created`);
+      
+      // Cache komplett deaktivieren
+      await this.page.setCacheEnabled(false);
+      
+      // Request-Interception für Memory-Optimierung
+      await this.page.setRequestInterception(true);
+      this.page.on('request', (request) => {
+        const resourceType = request.resourceType();
+        // Nur essentielle Requests durchlassen
+        if (['document', 'script', 'xhr', 'fetch'].includes(resourceType)) {
+          request.continue();
+        } else {
+          // Blockiere Bilder, Stylesheets, Fonts etc.
+          request.abort();
+        }
+      });
+      
+      console.log(`✅ [${this.mapName}] Browser initialization completed`);
+      
+    } catch (error) {
+      console.error(`❌ [${this.mapName}] Browser initialization failed:`, error.message);
+      console.error(`❌ [${this.mapName}] Full error:`, error);
+      throw error;
+    }
   }
 
   async login() {
@@ -245,7 +304,19 @@ class SingleMapExtractor {
       
       this.extractionInterval = setInterval(async () => {
         try {
+          // Prüfe ob Browser-Neustart nötig ist (alle 30 Minuten)
+          const timeSinceRestart = Date.now() - this.lastBrowserRestart;
+          if (timeSinceRestart > this.browserRestartInterval) {
+            await this.restartBrowser();
+          }
+          
           await this.extractSVG();
+          
+          // Memory-Cleanup alle 100 Extraktionen (weniger häufig)
+          if (this.extractionCount % 100 === 0) {
+            await this.performMemoryCleanup();
+          }
+          
         } catch (error) {
           console.error(`❌ [${this.mapName}] Extraction error:`, error.message);
         }
@@ -256,6 +327,111 @@ class SingleMapExtractor {
     } catch (error) {
       console.error(`❌ [${this.mapName}] Failed to start extraction:`, error);
       throw error;
+    }
+  }
+
+  async restartBrowser() {
+    try {
+      console.log(`🔄 [${this.mapName}] Restarting browser for memory cleanup...`);
+      
+      // Alte Browser-Instanz schließen
+      if (this.page) {
+        await this.page.close();
+        this.page = null;
+      }
+      if (this.browser) {
+        await this.browser.close();
+        this.browser = null;
+      }
+      
+      // Memory cleanup
+      if (global.gc) {
+        global.gc();
+      }
+      
+      // Neue Browser-Instanz starten
+      await this.init();
+      await this.login();
+      await this.navigateToMap();
+      
+      this.lastBrowserRestart = Date.now();
+      console.log(`✅ [${this.mapName}] Browser restarted successfully`);
+      
+    } catch (error) {
+      console.error(`❌ [${this.mapName}] Browser restart failed:`, error.message);
+      // Bei Fehler trotzdem Timestamp aktualisieren um endlose Restart-Loops zu vermeiden
+      this.lastBrowserRestart = Date.now();
+      throw error;
+    }
+  }
+
+  async performMemoryCleanup() {
+    try {
+      if (this.page) {
+        // Browser-Cache leeren über CDP Session
+        const client = await this.page.target().createCDPSession();
+        
+        // Verschiedene Cache-Clearing Methoden
+        try {
+          await client.send('Network.clearBrowserCache');
+        } catch (error) {
+          console.log(`🧹 [${this.mapName}] Network cache clearing not available: ${error.message}`);
+        }
+        
+        try {
+          await client.send('Storage.clearDataForOrigin', {
+            origin: await this.page.url(),
+            storageTypes: 'all'
+          });
+        } catch (error) {
+          console.log(`🧹 [${this.mapName}] Storage clearing not available: ${error.message}`);
+        }
+        
+        // Versuche Runtime.collectGarbage nur wenn verfügbar
+        try {
+          await client.send('Runtime.collectGarbage');
+        } catch (error) {
+          // Fallback: Page-level Memory cleanup
+          await this.page.evaluate(() => {
+            // Browser-eigene Garbage Collection triggern
+            if (window.gc) {
+              window.gc();
+            }
+            
+            // Memory-intensive Operations cleanup
+            if (window.performance && window.performance.clearMeasures) {
+              window.performance.clearMeasures();
+              window.performance.clearMarks();
+            }
+            
+            // Clear various caches
+            if ('caches' in window) {
+              caches.keys().then(names => {
+                names.forEach(name => {
+                  caches.delete(name);
+                });
+              });
+            }
+            
+            // Force garbage collection durch Memory-intensive Operation
+            const largeArray = new Array(1000000).fill('cleanup');
+            largeArray.length = 0;
+            
+            return 'cleanup_completed';
+          });
+        }
+        
+        await client.detach();
+      }
+      
+      // Node.js Garbage Collection
+      if (global.gc) {
+        global.gc();
+      }
+      
+      console.log(`🧹 [${this.mapName}] Memory cleanup performed (extraction #${this.extractionCount})`);
+    } catch (error) {
+      console.error(`❌ [${this.mapName}] Memory cleanup failed: ${error.message}`);
     }
   }
 
@@ -343,21 +519,72 @@ class SingleMapExtractor {
       
       // SVG für Dark Mode anpassen - weißen Background entfernen
       let processedSvgData = svgData;
+      let patternDefinition = null; // Variable außerhalb des if-Blocks definieren
       
       // SVG-Verarbeitung (nur für SVG-Daten)
       if (svgData.startsWith('<svg')) {
-        // Entferne background-style Attribute
-        processedSvgData = processedSvgData.replace(/style="[^"]*background:\s*rgb\(255,\s*255,\s*255\)[^"]*"/gi, '');
-        processedSvgData = processedSvgData.replace(/style="[^"]*background:\s*#ffffff[^"]*"/gi, '');
-        processedSvgData = processedSvgData.replace(/style="[^"]*background:\s*white[^"]*"/gi, '');
+        // Debug: Log original SVG length per map
+        console.log(`🔍 [${this.mapName}] Processing SVG with map-specific patterns (${Math.round(svgData.length / 1024)}KB)`);
         
-        // Entferne einfache background-style Attribute (wenn sie das einzige Attribut sind)
-        processedSvgData = processedSvgData.replace(/\sstyle="background:\s*rgb\(255,\s*255,\s*255\)"/gi, '');
-        processedSvgData = processedSvgData.replace(/\sstyle="background:\s*#ffffff"/gi, '');
-        processedSvgData = processedSvgData.replace(/\sstyle="background:\s*white"/gi, '');
+        // WICHTIG: Mache Pattern-IDs eindeutig pro Map, anstatt sie zu entfernen
+        const mapSpecificId = `background-${this.mapId}`;
         
-        // Entferne weiße rect-Backgrounds
-        processedSvgData = processedSvgData.replace(/(<rect[^>]*fill=")(?:white|#ffffff|rgb\(255,\s*255,\s*255\))("[^>]*>)/gi, '$1transparent$2');
+        // Extrahiere Pattern-Definition für zentrale Verwaltung
+        const patternMatch = processedSvgData.match(/<pattern id="background"[^>]*>[\s\S]*?<\/pattern>/gi);
+        if (patternMatch) {
+          patternDefinition = patternMatch[0].replace(/id="background"/gi, `id="${mapSpecificId}"`);
+        }
+        
+        // Ersetze generische "background" Pattern-ID mit map-spezifischer ID
+        processedSvgData = processedSvgData.replace(/<pattern id="background"/gi, `<pattern id="${mapSpecificId}"`);
+        
+        // Update alle Referenzen auf die neue map-spezifische ID
+        // Normale Anführungszeichen
+        processedSvgData = processedSvgData.replace(/fill="url\(#background\)"/gi, `fill="url(#${mapSpecificId})"`);
+        processedSvgData = processedSvgData.replace(/stroke="url\(#background\)"/gi, `stroke="url(#${mapSpecificId})"`);
+        
+        // HTML-Entitäten (&quot; anstatt ")
+        processedSvgData = processedSvgData.replace(/fill="url\(&quot;#background&quot;\)"/gi, `fill="url(&quot;#${mapSpecificId}&quot;)"`);
+        processedSvgData = processedSvgData.replace(/stroke="url\(&quot;#background&quot;\)"/gi, `stroke="url(&quot;#${mapSpecificId}&quot;)"`);
+        
+        // Entferne nur störende weiße Hintergründe, aber behalte eingebettete Bilder
+        // 1. Entferne explizite weiße background-color (nicht Pattern-Backgrounds!)
+        processedSvgData = processedSvgData.replace(/style="([^"]*?)background-color:\s*(?:white|#ffffff|rgb\(255,\s*255,\s*255\))(.*?)"/gi, (match, before, after) => {
+          const cleaned = (before + after).replace(/;\s*;/g, ';').replace(/^;\s*|;\s*$/g, '');
+          return cleaned ? `style="${cleaned}"` : '';
+        });
+        
+        // 2. Entferne einfache background-style Attribute (nur solid colors)
+        processedSvgData = processedSvgData.replace(/\sstyle="background-color:\s*(?:white|#ffffff|rgb\(255,\s*255,\s*255\))"/gi, '');
+        processedSvgData = processedSvgData.replace(/\sstyle="background:\s*(?:white|#ffffff|rgb\(255,\s*255,\s*255\))"/gi, '');
+        
+        // 3. Entferne weiße rect-Backgrounds nur wenn sie sehr groß sind (wahrscheinlich Vollbild-Hintergründe)
+        processedSvgData = processedSvgData.replace(/(<rect[^>]*width="[^"]*"[^>]*height="[^"]*"[^>]*fill=")(?:white|#ffffff|#FFFFFF|rgb\(255,\s*255,\s*255\))("[^>]*>)/gi, (match, before, after) => {
+          // Prüfe ob es ein großer Hintergrund-Rect ist
+          const widthMatch = match.match(/width="([^"]+)"/);
+          const heightMatch = match.match(/height="([^"]+)"/);
+          if (widthMatch && heightMatch) {
+            const width = parseFloat(widthMatch[1]);
+            const height = parseFloat(heightMatch[1]);
+            // Nur große Rects (> 1000x1000) als Hintergrund behandeln
+            if (width > 1000 && height > 1000) {
+              return before + 'transparent' + after;
+            }
+          }
+          return match; // Kleine Rects behalten
+        });
+        
+        // Debug: Log processed SVG length and changes
+        const changeSize = svgData.length - processedSvgData.length;
+        const patternCount = (processedSvgData.match(/pattern id="/g) || []).length;
+        console.log(`🎨 [${this.mapName}] Pattern processing: ${patternCount} patterns found, ${changeSize} characters changed`);
+        
+        // Prüfe ob map-spezifische Pattern-ID erfolgreich gesetzt wurde
+        if (processedSvgData.includes(mapSpecificId)) {
+          console.log(`✅ [${this.mapName}] Map-specific pattern ID '${mapSpecificId}' applied successfully`);
+        } else {
+          console.log(`⚠️ [${this.mapName}] No background pattern found in SVG`);
+        }
       }
       
       // Metadata erstellen
@@ -366,27 +593,28 @@ class SingleMapExtractor {
         mapName: this.mapName,
         timestamp: timestamp,
         url: `http://${this.routerIP}/webfig/#Dude:Network_Maps.Network_Map.${this.mapId}`,
-        selector: this.workingSelector
+        selector: this.workingSelector,
+        patternDefinition: patternDefinition // Pattern-Definition hinzufügen
       };
-      
-      // IPC Message an Parent Process senden (In-Memory-System)
-      if (process.send) {
-        try {
-          process.send({
-            type: 'map-update',
-            mapId: this.mapId,
-            svgData: processedSvgData,
-            metadata: metadata
-          });
-          
-          // Reduziertes Logging - nur jede 20. Extraktion loggen
-          if (this.extractionCount % 20 === 1) {
-            console.log(`📡 [${this.mapName}] Extraction #${this.extractionCount} sent via IPC (${Math.round(processedSvgData.length / 1024)}KB)`);
+        
+        // IPC Message an Parent Process senden (In-Memory-System)
+        if (process.send) {
+          try {
+            process.send({
+              type: 'map-update',
+              mapId: this.mapId,
+              svgData: processedSvgData,
+              metadata: metadata
+            });
+            
+            // Reduziertes Logging - nur jede 20. Extraktion loggen
+            if (this.extractionCount % 20 === 1) {
+              console.log(`📡 [${this.mapName}] Extraction #${this.extractionCount} sent via IPC (${Math.round(processedSvgData.length / 1024)}KB)`);
+            }
+          } catch (ipcError) {
+            console.error(`❌ [${this.mapName}] IPC error:`, ipcError.message);
           }
-        } catch (ipcError) {
-          console.error(`❌ [${this.mapName}] IPC error:`, ipcError.message);
         }
-      }
       
     } catch (error) {
       console.error(`❌ [${this.mapName}] Error processing SVG data:`, error);
@@ -399,20 +627,51 @@ class SingleMapExtractor {
     
     if (this.extractionInterval) {
       clearInterval(this.extractionInterval);
+      this.extractionInterval = null;
     }
     
-    if (this.browser) {
-      await this.browser.close();
+    try {
+      if (this.page) {
+        // Seite schließen und aufräumen
+        await this.page.close();
+        this.page = null;
+      }
+      
+      if (this.browser) {
+        // Browser ordnungsgemäß schließen
+        await this.browser.close();
+        this.browser = null;
+      }
+      
+      // Node.js Memory cleanup
+      if (global.gc) {
+        global.gc();
+      }
+      
+    } catch (error) {
+      console.error(`❌ [${this.mapName}] Error during cleanup:`, error.message);
+      
+      // Force kill browser wenn normal cleanup fehlschlägt
+      if (this.browser && this.browser.process()) {
+        this.browser.process().kill('SIGKILL');
+      }
     }
     
-    console.log(`✅ [${this.mapName}] Extraction stopped`);
+    console.log(`✅ [${this.mapName}] Extraction stopped and cleaned up`);
   }
 
   async run() {
     try {
+      console.log(`🔧 [${this.mapName}] Starting browser initialization...`);
       await this.init();
+      
+      console.log(`🔑 [${this.mapName}] Starting login process...`);
       await this.login();
+      
+      console.log(`🗺️ [${this.mapName}] Navigating to map...`);
       await this.navigateToMap();
+      
+      console.log(`⚡ [${this.mapName}] Starting extraction...`);
       await this.startExtraction();
       
       // Keep running until interrupted
@@ -422,10 +681,11 @@ class SingleMapExtractor {
         process.exit(0);
       });
       
-      console.log(`🎯 [${this.mapName}] Press Ctrl+C to stop extraction`);
+      console.log(`🎯 [${this.mapName}] Extraction running successfully - Press Ctrl+C to stop`);
       
     } catch (error) {
-      console.error(`💥 [${this.mapName}] Failed to run:`, error);
+      console.error(`💥 [${this.mapName}] Failed to run:`, error.message);
+      console.error(`💥 [${this.mapName}] Error stack:`, error.stack);
       await this.stop();
       process.exit(1);
     }

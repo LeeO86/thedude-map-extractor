@@ -13,6 +13,9 @@ const PORT = process.env.PORT || 3000;
 // In-Memory Store für aktuelle Map-Daten
 const mapStore = new Map();
 
+// Store für Pattern-Definitionen
+const patternStore = new Map();
+
 // Update Counter für reduced logging
 const mapUpdateCounts = new Map();
 
@@ -30,8 +33,49 @@ io.on('connection', (socket) => {
     sendMapsList(socket);
   });
   
+  // Map subscription für selective updates
+  socket.on('subscribe-map', (mapId) => {
+    // Leave all existing map rooms (nur eine Map pro Client)
+    socket.rooms.forEach(room => {
+      if (room.startsWith('map-')) {
+        socket.leave(room);
+      }
+    });
+    
+    // Join new map room
+    socket.join(`map-${mapId}`);
+    
+    // Sofort aktuelle Map-Daten senden (Initial Push)
+    if (mapStore.has(mapId)) {
+      const data = mapStore.get(mapId);
+      socket.emit('map-updated', {
+        mapId: mapId,
+        svgData: data.svgData,
+        metadata: data.metadata,
+        timestamp: data.metadata.timestamp || new Date().toISOString()
+      });
+    }
+    
+    // Debug logging nur wenn DEBUG=true
+    if (process.env.DEBUG === 'true') {
+      console.log(`📡 [SUBSCRIPTION] Client ${socket.id} subscribed to map ${mapId}`);
+    }
+  });
+  
+  socket.on('unsubscribe-all', () => {
+    // Leave all map rooms (zurück zur Startseite)
+    socket.rooms.forEach(room => {
+      if (room.startsWith('map-')) {
+        socket.leave(room);
+      }
+    });
+    if (process.env.DEBUG === 'true') {
+      console.log(`📡 [SUBSCRIPTION] Client ${socket.id} unsubscribed from all maps`);
+    }
+  });
+  
   socket.on('disconnect', () => {
-    // Client disconnected silently
+    // Client disconnected silently - rooms werden automatisch geleert
   });
 });
 
@@ -45,6 +89,11 @@ function broadcastMapUpdate(mapId, svgData, metadata) {
       lastUpdated: Date.now()
     });
     
+    // Pattern-Definition speichern falls vorhanden
+    if (metadata.patternDefinition) {
+      patternStore.set(mapId, metadata.patternDefinition);
+    }
+    
     // Logging nur alle 10 Updates pro Map (reduziert Spam)
     if (!mapUpdateCounts.has(mapId)) {
       mapUpdateCounts.set(mapId, 0);
@@ -56,9 +105,11 @@ function broadcastMapUpdate(mapId, svgData, metadata) {
       console.log(`📡 [MEMORY] Map ${mapId} updated #${count} (${Math.round(svgData.length / 1024)}KB)`);
     }
     
-    // Real-time Update an alle Clients senden
-    io.emit('map-updated', {
+    // Real-time Update nur an subscribed Clients senden (PUSH mit vollständigen Daten)
+    io.to(`map-${mapId}`).emit('map-updated', {
       mapId: mapId,
+      svgData: svgData,
+      metadata: metadata,
       timestamp: metadata.timestamp || new Date().toISOString()
     });
     
@@ -167,6 +218,7 @@ app.get('/api/maps/:id', (req, res) => {
   }
 });
 
+
 // Extraktions-Status API
 app.get('/api/status', (req, res) => {
   try {
@@ -185,6 +237,20 @@ app.get('/api/status', (req, res) => {
     res.json(stats);
   } catch (error) {
     console.error('Error getting status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Pattern-Definitionen API
+app.get('/api/patterns', (req, res) => {
+  try {
+    const patterns = {};
+    for (const [mapId, pattern] of patternStore.entries()) {
+      patterns[mapId] = pattern;
+    }
+    res.json({ patterns });
+  } catch (error) {
+    console.error('Error getting patterns:', error);
     res.status(500).json({ error: error.message });
   }
 });

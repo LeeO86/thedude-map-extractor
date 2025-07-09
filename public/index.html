@@ -14,7 +14,8 @@
     
     <!-- Theme color for mobile browsers -->
     <meta name="theme-color" content="#2563eb">
-    <meta name="msapplication-TileColor" content="#2563eb">
+    <meta name            // Maps laden - über REST API (unabhängig von WebSocket)
+            loadAvailableMaps();tion-TileColor" content="#2563eb">
     
     <!-- SEO Meta Tags -->
     <meta name="description" content="Extract and display TheDude network maps from MikroTik router in real-time">
@@ -147,6 +148,8 @@
             text-decoration: none;
             color: inherit;
             border: 1px solid #404055;
+            display: flex;
+            flex-direction: column;
         }
 
         .map-card:hover {
@@ -167,9 +170,21 @@
             margin-bottom: 10px;
         }
 
+
+
+        .map-card .map-info {
+            margin-top: auto;
+        }
+
         .map-card .last-update {
             color: #b0bec5;
             font-size: 0.9em;
+            margin-bottom: 5px;
+        }
+
+        .map-card .map-size {
+            color: #90a4ae;
+            font-size: 0.8em;
         }
 
         .loading-text {
@@ -217,17 +232,24 @@
             background: transparent !important;
         }
 
-        /* SVG Dark Mode Override */
-        .map-viewer svg > * {
-            background: transparent !important;
-        }
+        /* SVG Dark Mode Override - nur Vollbild-Hintergründe entfernen */
 
-        /* Falls das SVG ein rect als Background hat */
-        .map-viewer svg rect[fill="white"],
-        .map-viewer svg rect[fill="#ffffff"],
-        .map-viewer svg rect[fill="rgb(255,255,255)"] {
+        /* Entferne nur große weiße rect-Backgrounds (Vollbild-Hintergründe), nicht kleine Pattern-Elemente */
+        .map-viewer svg > rect[fill="white"],
+        .map-viewer svg > rect[fill="#ffffff"],
+        .map-viewer svg > rect[fill="rgb(255,255,255)"] {
+            /* Nur wenn es ein direktes Kind des SVG ist und wahrscheinlich ein Vollbild-Hintergrund */
             fill: transparent !important;
         }
+
+        /* Pattern-Backgrounds sollen erhalten bleiben - überschreibe nur störende Styles */
+        .map-viewer svg pattern * {
+            /* Pattern-Inhalte sollen ihre ursprünglichen Styles behalten */
+            background: unset !important;
+            fill: unset !important;
+        }
+
+
 
         /* Bottom-Right Overlay */
         .map-overlay {
@@ -506,7 +528,8 @@
         const AppState = {
             currentPage: 'start', // 'start' oder 'map'
             maps: [],
-            isConnected: false
+            isConnected: false,
+            patterns: {} // Pattern-Definitionen Cache
         };
 
         // Socket.IO Verbindung initialisieren
@@ -517,15 +540,11 @@
                 updateConnectionStatus(true);
                 hideErrorOverlay();
                 
-                // Wenn wir auf der Startseite sind, Maps laden
-                if (AppState.currentPage === 'start') {
-                    loadAvailableMaps();
-                }
-                
-                // Wenn wir auf einer Map-Seite sind, Map über WebSocket anfordern
+                // Wenn wir auf einer Map-Seite sind, Map subscriben (Push erfolgt automatisch)
                 if (AppState.currentPage === 'map' && currentMapId) {
-                    socket.emit('request-map', currentMapId);
+                    socket.emit('subscribe-map', currentMapId);
                 }
+                // Startseite lädt Maps über REST API, nicht WebSocket
             });
             
             socket.on('disconnect', () => {
@@ -540,15 +559,27 @@
             });
             
             socket.on('map-updated', (data) => {
-                // Wenn die aktuell angezeigte Map aktualisiert wurde, neue Daten anfordern
+                // Pattern-Definitionen aktualisieren falls neue vorhanden
+                if (data.metadata && data.metadata.patternDefinition) {
+                    AppState.patterns[data.mapId] = data.metadata.patternDefinition;
+                    updatePatternDefinitions();
+                }
+                
+                // Echte PUSH-Architektur: Direkt die SVG-Daten anzeigen
                 if (currentMapId === data.mapId) {
-                    socket.emit('request-map', currentMapId);
+                    displayMapData(data);
                 }
                 
                 updateLastUpdateTime(data.timestamp);
             });
             
             socket.on('map-data', (data) => {
+                // Pattern-Definitionen aktualisieren falls neue vorhanden
+                if (data.metadata && data.metadata.patternDefinition) {
+                    AppState.patterns[data.mapId] = data.metadata.patternDefinition;
+                    updatePatternDefinitions();
+                }
+                
                 displayMapData(data);
                 updateLastUpdateTime(data.metadata.timestamp);
             });
@@ -611,29 +642,19 @@
             // URL aktualisieren
             window.history.pushState({ page: 'start' }, '', '/');
             
+            // Unsubscribe von allen Map-Updates
+            if (socket && AppState.isConnected) {
+                socket.emit('unsubscribe-all');
+            }
+            
             // Map-Updates stoppen
             if (updateInterval) {
                 clearInterval(updateInterval);
                 updateInterval = null;
             }
             
-            // Maps laden - nur wenn WebSocket bereits verbunden ist
-            if (AppState.isConnected) {
-                loadAvailableMaps();
-            } else {
-                // Warten auf WebSocket-Verbindung
-                const loadingEl = document.getElementById('loadingMaps');
-                const gridEl = document.getElementById('mapsGrid');
-                
-                loadingEl.style.display = 'block';
-                gridEl.innerHTML = `
-                    <div style="grid-column: 1 / -1; text-align: center; padding: 50px; color: #e0e0e0;">
-                        <div class="spinner" style="display: inline-block; margin-right: 10px;"></div>
-                        <h3>🔌 Verbinde WebSocket...</h3>
-                        <p>Bitte warten Sie, während die Verbindung hergestellt wird.</p>
-                    </div>
-                `;
-            }
+            // Maps laden - über REST API (unabhängig von WebSocket)
+            loadAvailableMaps();
         }
 
         // Map-Seite anzeigen
@@ -647,17 +668,29 @@
             // URL aktualisieren
             window.history.pushState({ page: 'map', mapId: mapId }, '', `/map/${mapId}`);
             
-            // Map über WebSocket laden und subscriben
-            subscribeToMap(mapId);
+            // Sicherstellen, dass Pattern-Definitionen geladen sind bevor Map angezeigt wird
+            const patternsPromise = Object.keys(AppState.patterns).length === 0 ? 
+                loadPatternDefinitions() : 
+                Promise.resolve();
             
-            // Auto-Update Interval löschen (wird nicht mehr benötigt)
-            if (updateInterval) {
-                clearInterval(updateInterval);
-                updateInterval = null;
-            }
+            patternsPromise.then(() => {
+                // Auto-subscribe zu dieser Map für Live-Updates
+                if (socket && AppState.isConnected) {
+                    socket.emit('subscribe-map', mapId);
+                }
+                
+                // Map über WebSocket laden
+                subscribeToMap(mapId);
+                
+                // Auto-Update Interval löschen (wird nicht mehr benötigt)
+                if (updateInterval) {
+                    clearInterval(updateInterval);
+                    updateInterval = null;
+                }
+            });
         }
 
-        // Verfügbare Maps laden (nur über WebSocket)
+        // Verfügbare Maps laden
         function loadAvailableMaps() {
             const loadingEl = document.getElementById('loadingMaps');
             const gridEl = document.getElementById('mapsGrid');
@@ -665,19 +698,23 @@
             loadingEl.style.display = 'block';
             gridEl.innerHTML = '';
             
-            // Maps über WebSocket anfordern
-            if (socket && AppState.isConnected) {
-                socket.emit('request-maps-list');
-            } else {
-                gridEl.innerHTML = `
-                    <div style="grid-column: 1 / -1; text-align: center; padding: 50px; color: #e0e0e0;">
-                        <h3>❌ WebSocket nicht verbunden</h3>
-                        <p>WebSocket-Verbindung erforderlich zum Laden der Maps.</p>
-                        <button onclick="reconnectWebSocket()" style="margin-top: 15px; padding: 10px 20px; background: #64ffda; color: #1a1a2e; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.3s ease;">Neu verbinden</button>
-                    </div>
-                `;
-                loadingEl.style.display = 'none';
-            }
+            // Maps über REST API laden
+            fetch('/api/maps')
+                .then(response => response.json())
+                .then(data => {
+                    handleMapsListReceived(data.maps || []);
+                })
+                .catch(error => {
+                    console.error('Error loading maps:', error);
+                    gridEl.innerHTML = `
+                        <div style="grid-column: 1 / -1; text-align: center; padding: 50px; color: #e0e0e0;">
+                            <h3>❌ Fehler beim Laden der Maps</h3>
+                            <p>Konnte Maps nicht vom Server laden: ${error.message}</p>
+                            <button onclick="loadAvailableMaps()" style="margin-top: 15px; padding: 10px 20px; background: #64ffda; color: #1a1a2e; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.3s ease;">Erneut versuchen</button>
+                        </div>
+                    `;
+                    loadingEl.style.display = 'none';
+                });
         }
 
         // Maps-Liste verarbeiten
@@ -730,25 +767,29 @@
             card.innerHTML = `
                 <div class="map-id">${map.id}</div>
                 <h3>${map.name || `Map ${map.id}`}</h3>
-                <div class="last-update">Letzte Aktualisierung: ${lastUpdate}</div>
+                <div class="map-info">
+                    <div class="last-update">Letzte Aktualisierung: ${lastUpdate}</div>
+                    <div class="map-size">${map.size || 'Unbekannt'}</div>
+                </div>
             `;
             
             return card;
         }
 
-        // Map-Daten laden (nur über WebSocket)
+
+
+        // Map-Daten laden (nur über WebSocket Push)
         function subscribeToMap(mapId) {
             const loadingEl = document.getElementById('mapLoading');
             
             // Loading anzeigen
             loadingEl.classList.add('show');
             
-            // Map über WebSocket anfordern
-            if (socket && AppState.isConnected) {
-                socket.emit('request-map', mapId);
-            } else {
+            // Subscription reicht - Map-Daten kommen automatisch per Push
+            if (!socket || !AppState.isConnected) {
                 showErrorOverlay('WebSocket-Verbindung nicht verfügbar. Bitte laden Sie die Seite neu.');
             }
+            // Subscription erfolgt bereits in showMapPage() - hier nur Loading anzeigen
         }
 
         // Map-Daten anzeigen
@@ -759,6 +800,20 @@
             // Loading verstecken
             loadingEl.classList.remove('show');
             
+            // Prüfen ob Pattern-Definitionen verfügbar sind
+            if (Object.keys(AppState.patterns).length === 0) {
+                console.log('🎨 Pattern definitions not loaded yet, loading now...');
+                loadPatternDefinitions().then(() => {
+                    // Nach dem Laden der Patterns, Map-Daten erneut anzeigen
+                    displayMapDataInternal(mapData, viewer);
+                });
+            } else {
+                displayMapDataInternal(mapData, viewer);
+            }
+        }
+
+        // Map-Daten intern anzeigen (nach Pattern-Loading)
+        function displayMapDataInternal(mapData, viewer) {
             if (mapData.svgData) {
                 // Seamless SVG update - erstelle temporäres Element
                 const tempDiv = document.createElement('div');
@@ -771,6 +826,14 @@
                     svg.style.maxHeight = '100%';
                     svg.style.width = 'auto';
                     svg.style.height = 'auto';
+                    
+                    // Background-Bereinigung für Map-View (zusätzlich zu CSS)
+                    const whiteRects = svg.querySelectorAll('rect[fill="white"], rect[fill="#ffffff"], rect[fill="rgb(255,255,255)"]');
+                    whiteRects.forEach(rect => {
+                        rect.setAttribute('fill', 'transparent');
+                    });
+                    
+                    console.log(`🗺️ Map updated: ${mapData.mapId} (${Math.round(mapData.svgData.length / 1024)}KB)`);
                 }
                 
                 // Nur ersetzen wenn neues SVG bereit ist
@@ -853,6 +916,9 @@
             // WebSocket initialisieren
             initSocket();
             
+            // Pattern-Definitionen laden
+            loadPatternDefinitions();
+            
             // Route basierend auf URL bestimmen
             const path = window.location.pathname;
             if (path.startsWith('/map/')) {
@@ -862,6 +928,59 @@
                 showStartPage();
             }
         });
+
+        // Pattern-Definitionen laden
+        function loadPatternDefinitions() {
+            return fetch('/api/patterns')
+                .then(response => response.json())
+                .then(data => {
+                    AppState.patterns = data.patterns || {};
+                    updatePatternDefinitions();
+                    console.log(`🎨 Loaded ${Object.keys(AppState.patterns).length} pattern definitions`);
+                })
+                .catch(error => {
+                    console.error('Error loading patterns:', error);
+                });
+        }
+
+        // Pattern-Definitionen im DOM aktualisieren
+        function updatePatternDefinitions() {
+            // Bestehende Pattern-Definitionen entfernen
+            const existingDefs = document.getElementById('pattern-definitions');
+            if (existingDefs) {
+                existingDefs.remove();
+            }
+            
+            // Neue Pattern-Definitionen erstellen
+            if (Object.keys(AppState.patterns).length > 0) {
+                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.setAttribute('id', 'pattern-definitions');
+                svg.setAttribute('width', '0');
+                svg.setAttribute('height', '0');
+                svg.style.position = 'absolute';
+                svg.style.top = '-9999px';
+                
+                const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+                
+                // Alle Pattern-Definitionen hinzufügen
+                Object.values(AppState.patterns).forEach(pattern => {
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = pattern;
+                    const patternElement = tempDiv.querySelector('pattern');
+                    if (patternElement) {
+                        defs.appendChild(patternElement);
+                    }
+                });
+                
+                svg.appendChild(defs);
+                document.body.appendChild(svg);
+                
+                console.log(`🎨 Pattern definitions updated: ${Object.keys(AppState.patterns).length} patterns`);
+            }
+        }
+
+        // Initiale Pattern-Definitionen laden
+        loadPatternDefinitions();
     </script>
 </body>
 </html>

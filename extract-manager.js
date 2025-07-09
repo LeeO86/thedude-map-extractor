@@ -11,6 +11,7 @@ class MapExtractionManager {
     this.serverProcess = null;
     this.broadcastCallback = null;
     this.isRunning = false;
+    this.memoryMonitorInterval = null;
   }
 
   parseMapsConfig() {
@@ -51,7 +52,13 @@ class MapExtractionManager {
     const scriptPath = path.join(__dirname, 'extract-single-map.js');
     const child = spawn('node', [scriptPath, map.id, map.name], {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-      env: { ...process.env }
+      env: { 
+        ...process.env,
+        // Node.js Memory-Optimierungen für Child-Prozesse
+        NODE_OPTIONS: '--max-old-space-size=512 --expose-gc',
+        // Reduzierte Browser-Cache-Größe
+        PUPPETEER_CACHE_DIR: '/tmp/puppeteer-cache'
+      }
     });
     
     // IPC Message Handler für Map-Updates
@@ -72,7 +79,8 @@ class MapExtractionManager {
         // Only log important messages (startup, errors, login status)
         if (line.includes('🚀') || line.includes('❌') || 
             line.includes('Login successful') || line.includes('Extraction started') ||
-            line.includes('Error') || line.includes('Failed') || line.includes('exited')) {
+            line.includes('Error') || line.includes('Failed') || line.includes('exited') ||
+            line.includes('Memory cleanup') || line.includes('Browser restarted')) {
           console.log(`📊 [${map.name}] ${line}`);
         }
       });
@@ -88,6 +96,11 @@ class MapExtractionManager {
     child.on('exit', (code) => {
       console.log(`💀 [${map.name}] Process exited with code ${code}`);
       this.processes.delete(map.id);
+      
+      // Memory cleanup nach Process-Exit
+      if (global.gc) {
+        global.gc();
+      }
       
       // Restart if it wasn't intentionally stopped
       if (this.isRunning && code !== 0) {
@@ -133,6 +146,9 @@ class MapExtractionManager {
     console.log(`✅ All ${maps.length} extraction processes started`);
     console.log('✅ Web server running');
     
+    // Start memory monitoring
+    this.startMemoryMonitoring();
+    
     // Setup signal handlers
     process.on('SIGINT', () => {
       console.log('\n🛑 Received SIGINT, stopping all processes...');
@@ -147,9 +163,42 @@ class MapExtractionManager {
     this.printStatus();
   }
 
+  startMemoryMonitoring() {
+    // Memory monitoring alle 5 Minuten
+    this.memoryMonitorInterval = setInterval(() => {
+      const memUsage = process.memoryUsage();
+      const memUsageMB = {
+        rss: Math.round(memUsage.rss / 1024 / 1024),
+        heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+        heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+        external: Math.round(memUsage.external / 1024 / 1024)
+      };
+      
+      console.log(`🧠 Memory Usage: RSS: ${memUsageMB.rss}MB, Heap: ${memUsageMB.heapUsed}/${memUsageMB.heapTotal}MB, External: ${memUsageMB.external}MB`);
+      
+      // Automatische Garbage Collection wenn Memory zu hoch
+      if (memUsageMB.heapUsed > 200 && global.gc) {
+        console.log('🧹 Performing automatic garbage collection...');
+        global.gc();
+      }
+      
+      // Warnung bei hohem Memory-Verbrauch
+      if (memUsageMB.rss > 1000) {
+        console.log('⚠️ WARNING: High memory usage detected! Consider restarting the application.');
+      }
+      
+    }, 5 * 60 * 1000); // alle 5 Minuten
+  }
+
   async stopAll() {
     console.log('🛑 Stopping all extraction processes...');
     this.isRunning = false;
+    
+    // Stop memory monitoring
+    if (this.memoryMonitorInterval) {
+      clearInterval(this.memoryMonitorInterval);
+      this.memoryMonitorInterval = null;
+    }
     
     // Stop web server
     if (this.serverProcess) {
@@ -178,13 +227,28 @@ class MapExtractionManager {
     }
     
     clearTimeout(timeout);
-    console.log('✅ All processes stopped');
+    
+    // Final memory cleanup
+    if (global.gc) {
+      global.gc();
+    }
+    
+    console.log('✅ All processes stopped and memory cleaned up');
     process.exit(0);
   }
 
   printStatus() {
     console.log('\n📊 System Status:');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    
+    // Memory usage
+    const memUsage = process.memoryUsage();
+    const memUsageMB = {
+      rss: Math.round(memUsage.rss / 1024 / 1024),
+      heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+      heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024)
+    };
+    console.log(`🧠 Memory Usage      | RSS: ${memUsageMB.rss}MB | Heap: ${memUsageMB.heapUsed}/${memUsageMB.heapTotal}MB`);
     
     // Web server status
     const serverStatus = this.serverProcess ? '🟢 Running' : '🔴 Stopped';
@@ -200,7 +264,7 @@ class MapExtractionManager {
     
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log(`🎯 Total extraction processes: ${this.processes.size}`);
-    console.log(`� Memory-only mode: Maps stored in-memory and pushed via IPC`);
+    console.log(`🧠 Memory-optimized mode: Automatic cleanup and browser restarts`);
     console.log(`🌐 Web interface: http://localhost:${process.env.PORT || 3000}`);
     console.log('\nPress Ctrl+C to stop all processes');
     
