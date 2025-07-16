@@ -58,7 +58,8 @@ class SingleMapExtractor {
           // Entfernt: --single-process und --no-zygote (verursachen Probleme)
         ],
         defaultViewport: { width: 1920, height: 1080 },
-        timeout: 30000
+        timeout: 30000,
+        userDataDir: `/tmp/puppeteer/${this.mapId}` // Map-spezifisches User Data Directory
       });
       
       console.log(`✅ [${this.mapName}] Browser launched successfully`);
@@ -641,6 +642,25 @@ class SingleMapExtractor {
         // Browser ordnungsgemäß schließen
         await this.browser.close();
         this.browser = null;
+      }
+      
+      // User Data Directory löschen
+      const userDataDir = `/tmp/puppeteer/${this.mapId}`;
+      try {
+        const fs = require('fs').promises;
+        const path = require('path');
+        
+        // Prüfe ob Verzeichnis existiert
+        await fs.access(userDataDir);
+        
+        // Rekursiv löschen
+        await fs.rm(userDataDir, { recursive: true, force: true });
+        console.log(`🗑️ [${this.mapName}] User data directory cleaned: ${userDataDir}`);
+      } catch (fsError) {
+        // Verzeichnis existiert nicht oder konnte nicht gelöscht werden
+        if (fsError.code !== 'ENOENT') {
+          console.warn(`⚠️ [${this.mapName}] Could not clean user data directory: ${fsError.message}`);
+        }
       }
       
       // Node.js Memory cleanup
